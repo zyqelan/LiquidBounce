@@ -127,10 +127,10 @@ object SubmoduleBasePlace : ToggleableValueGroup(ModuleCrystalAura, "BasePlace",
         this,
         Priority.IMPORTANT_FOR_USAGE_2,
         slotFinder = { _ ->
-            val obsidian = { Slots.OffhandWithHotbar.findSlot(Items.OBSIDIAN) }
-            val bedrock = { Slots.OffhandWithHotbar.findSlot(Items.BEDROCK) }
+            val findObsidian = { Slots.OffhandWithHotbar.findSlot(Items.OBSIDIAN) }
+            val findBedrock = { Slots.OffhandWithHotbar.findSlot(Items.BEDROCK) }
 
-            if (this.bedrock) bedrock() ?: obsidian() else obsidian() ?: bedrock()
+            if (bedrock) findBedrock() ?: findObsidian() else findObsidian() ?: findBedrock()
         },
     ))
 
