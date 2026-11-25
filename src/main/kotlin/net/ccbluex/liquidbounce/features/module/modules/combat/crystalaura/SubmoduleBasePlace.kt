@@ -115,12 +115,22 @@ object SubmoduleBasePlace : ToggleableValueGroup(ModuleCrystalAura, "BasePlace",
 
     val minAdvantage by float("MinAdvantage", 2.0f, 0.1f..10f)
 
+    /**
+     * Prefers bedrock as the base block whenever it is available.
+     * Only works on servers and worlds that permit placing bedrock, which is why this is off by default.
+     * Falls back to the usual block selection when no bedrock can be found.
+     */
+    private val bedrock by boolean("Bedrock", false)
+
     private val placer = tree(BlockPlacer(
         "Placing",
         this,
         Priority.IMPORTANT_FOR_USAGE_2,
         slotFinder = { _ ->
-            Slots.OffhandWithHotbar.findSlot(Items.OBSIDIAN) ?: Slots.OffhandWithHotbar.findSlot(Items.BEDROCK)
+            val obsidian = { Slots.OffhandWithHotbar.findSlot(Items.OBSIDIAN) }
+            val bedrock = { Slots.OffhandWithHotbar.findSlot(Items.BEDROCK) }
+
+            if (this.bedrock) bedrock() ?: obsidian() else obsidian() ?: bedrock()
         },
     ))
 
