@@ -27,11 +27,14 @@ import net.ccbluex.liquidbounce.features.module.modules.render.debug.debugParame
 import net.ccbluex.liquidbounce.utils.aiming.RotationManager
 import net.ccbluex.liquidbounce.utils.aiming.data.Rotation
 import net.ccbluex.liquidbounce.utils.aiming.utils.raytraceBox
+import net.ccbluex.liquidbounce.utils.client.Chronometer
 import net.minecraft.core.BlockPos
 import net.minecraft.network.protocol.game.ClientboundAddEntityPacket
 import net.minecraft.network.protocol.game.ClientboundLoginPacket
 import net.minecraft.network.protocol.game.ServerboundAttackPacket
 import net.minecraft.network.protocol.game.ServerboundMovePlayerPacket
+import net.minecraft.world.entity.EntityType
+import net.minecraft.world.entity.EntityTypes
 import net.minecraft.world.entity.boss.enderdragon.EndCrystal
 import net.minecraft.world.phys.AABB
 import kotlin.math.max
@@ -45,7 +48,7 @@ object SubmoduleIdPredict : ToggleableValueGroup(ModuleCrystalAura, "IDPredict",
     /**
      * Sends a packet for all included offsets.
      */
-    private val offsetRange by intRange("OffsetRange", 1..2, 1..100)
+    private val offsetRange by intRange("OffsetRange", 1..1, 1..100)
 
     /**
      * Swings before every attack. Otherwise, it will only swing once.
@@ -53,6 +56,23 @@ object SubmoduleIdPredict : ToggleableValueGroup(ModuleCrystalAura, "IDPredict",
      * Only works when [SubmoduleCrystalDestroyer.swingMode] is enabled.
      */
     private val swingAlways by boolean("SwingAlways", false)
+
+    /**
+     * Pauses the prediction after an item, experience orb or arrow spawned. The server disconnects with
+     * "invalid entity attacked" when an attack resolves to one of those, and while they are spawning the
+     * next id is likely to belong to another one of them instead of the crystal.
+     */
+    private val hazardPause by int("HazardPause", 150, 0..1000, "ms")
+
+    private val hazardChronometer = Chronometer()
+
+    private val hazardousTypes = setOf<EntityType<*>>(
+        EntityTypes.ITEM,
+        EntityTypes.EXPERIENCE_ORB,
+        EntityTypes.ARROW,
+        EntityTypes.SPECTRAL_ARROW,
+        EntityTypes.TRIDENT
+    )
 
     /**
      * Sends an additional rotation packet.
@@ -119,6 +139,10 @@ object SubmoduleIdPredict : ToggleableValueGroup(ModuleCrystalAura, "IDPredict",
             return
         }
 
+        if (!hazardChronometer.hasElapsed(hazardPause.toLong())) {
+            return
+        }
+
         val (rotation, _) =
             raytraceBox(
                 player.eyePosition,
@@ -127,19 +151,36 @@ object SubmoduleIdPredict : ToggleableValueGroup(ModuleCrystalAura, "IDPredict",
                 wallsRange = SubmoduleCrystalDestroyer.wallsRange.toDouble(),
             ) ?: return
 
-        Rotate.sendRotation(rotation.normalize())
+        val normalized = rotation.normalize()
+        // A non-finite rotation serialises into a packet the server rejects outright.
+        if (!normalized.yaw.isFinite() || !normalized.pitch.isFinite()) {
+            return
+        }
+
+        Rotate.sendRotation(normalized)
 
         val swingMode = SubmoduleCrystalDestroyer.swingMode
         if (!swingAlways) {
             swingMode.attackSwing()
         }
 
+        // Without a baseline the prediction is a blind guess at the start of the id space.
+        if (highestId <= 0) {
+            reset()
+
+            if (highestId <= 0) {
+                return
+            }
+        }
+
         offsetRange.forEach { idOffset ->
             val id = highestId + idOffset
 
-            // don't attack other entities in case the highest ID is wrong
+            // Never attack an id that resolves to something that is not a live crystal. Unknown ids are
+            // still sent, because that is the prediction this feature exists for, but a known removed or
+            // wrong entity never is.
             val entity = world.getEntity(id)
-            if (entity != null && entity !is EndCrystal) {
+            if (entity != null && (entity !is EndCrystal || entity.isRemoved || !entity.isAlive)) {
                 return@forEach
             }
 
@@ -167,7 +208,13 @@ object SubmoduleIdPredict : ToggleableValueGroup(ModuleCrystalAura, "IDPredict",
         when(val packet = it.packet) {
             // TODO: I guess this packet is merged into EntitySpawnS2CPacket
 //            is ExperienceOrbSpawnS2CPacket -> highestId = max(packet.entityId, highestId)
-            is ClientboundAddEntityPacket -> highestId = max(packet.id, highestId)
+            is ClientboundAddEntityPacket -> {
+                highestId = max(packet.id, highestId)
+
+                if (packet.type in hazardousTypes) {
+                    hazardChronometer.reset()
+                }
+            }
             is ClientboundLoginPacket -> highestId = max(packet.playerId, highestId)
         }
     }
